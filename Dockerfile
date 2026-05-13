@@ -1,19 +1,37 @@
-FROM mcr.microsoft.com/playwright:v1.52.0-noble
+FROM node:22-bookworm-slim
+
+# Install Playwright system dependencies
+RUN apt-get update && apt-get install -y \
+    chromium \
+    libnspr4 \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tell Playwright to use the system Chromium instead of downloading its own
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 WORKDIR /app
 
-# Copy package files and install dependencies
 COPY package.json ./
 RUN npm install --omit=dev
 
-# Playwright browsers are pre-installed in the base image
-# but we need to make sure chromium is available
-RUN npx playwright install chromium --with-deps || true
-
-# Copy application code
 COPY index.js ./
 
-# Expose port (Railway sets $PORT automatically)
 EXPOSE 3000
 
 CMD ["node", "index.js"]

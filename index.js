@@ -24,7 +24,7 @@ let sessionState = { isLoggedIn: false, schoolSlug: null };
 
 async function getBrowserPage() {
   if (!browser || !browser.isConnected()) {
-    browser = await chromium.launch({ headless: true, args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"] });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage","--disable-gpu","--single-process"] });
     context = await browser.newContext({ locale: "da-DK" });
     page = await context.newPage();
     sessionState = { isLoggedIn: false, schoolSlug: null };
