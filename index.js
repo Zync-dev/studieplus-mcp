@@ -12,6 +12,7 @@ const _sdkPkg = require.resolve("@modelcontextprotocol/sdk/package.json").replac
 const sdkRequire = createRequire(_sdkPkg);
 const { McpServer } = sdkRequire("./dist/cjs/server/mcp.js");
 const { StreamableHTTPServerTransport } = sdkRequire("./dist/cjs/server/streamableHttp.js");
+const { SSEServerTransport } = sdkRequire("./dist/cjs/server/sse.js");
 const { z } = require("zod");
 const { chromium } = require("playwright");
 
@@ -380,16 +381,46 @@ function buildMcpServer() {
 }
 
 // ── HTTP server ────────────────────────────────
-const transports = new Map();
+const mcpTransports = new Map();  // sessionId -> StreamableHTTP transport
+const sseTransports = new Map();   // sessionId -> SSE transport
 
 const httpServer = http.createServer(async function(req, res) {
-  // Health check for Railway
+  // CORS headers — needed for Claude Desktop
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id, Accept");
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+  // Health check
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", loggedIn: sessionState.isLoggedIn }));
     return;
   }
 
+  // ── SSE endpoint (for Claude Desktop compatibility) ──
+  if (req.method === "GET" && req.url === "/sse") {
+    const server = buildMcpServer();
+    const transport = new SSEServerTransport("/messages", res);
+    sseTransports.set(transport.sessionId, transport);
+    transport.onclose = function() { sseTransports.delete(transport.sessionId); };
+    await server.connect(transport);
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/messages")) {
+    const url = new URL(req.url, "http://localhost");
+    const sessionId = url.searchParams.get("sessionId");
+    const transport = sessionId ? sseTransports.get(sessionId) : null;
+    if (!transport) { res.writeHead(404); res.end(JSON.stringify({ error: "SSE session not found" })); return; }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString();
+    await transport.handlePostMessage(req, res, body);
+    return;
+  }
+
+  // ── Streamable HTTP endpoint ──
   if (req.url === "/mcp") {
     if (req.method === "POST") {
       const chunks = [];
@@ -397,15 +428,15 @@ const httpServer = http.createServer(async function(req, res) {
       const body = Buffer.concat(chunks).toString();
 
       const sessionId = req.headers["mcp-session-id"];
-      let transport = sessionId ? transports.get(sessionId) : null;
+      let transport = sessionId ? mcpTransports.get(sessionId) : null;
 
       if (!transport) {
         const server = buildMcpServer();
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: function() { return randomUUID(); },
-          onsessioninitialized: function(id) { transports.set(id, transport); }
+          onsessioninitialized: function(id) { mcpTransports.set(id, transport); }
         });
-        transport.onclose = function() { if (transport.sessionId) transports.delete(transport.sessionId); };
+        transport.onclose = function() { if (transport.sessionId) mcpTransports.delete(transport.sessionId); };
         await server.connect(transport);
       }
 
@@ -415,7 +446,7 @@ const httpServer = http.createServer(async function(req, res) {
 
     if (req.method === "GET" || req.method === "DELETE") {
       const sessionId = req.headers["mcp-session-id"];
-      const transport = sessionId ? transports.get(sessionId) : null;
+      const transport = sessionId ? mcpTransports.get(sessionId) : null;
       if (!transport) { res.writeHead(404); res.end(JSON.stringify({ error: "Session not found" })); return; }
       await transport.handleRequest(req, res);
       return;
@@ -423,7 +454,7 @@ const httpServer = http.createServer(async function(req, res) {
   }
 
   res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Not found", hint: "MCP endpoint is /mcp" }));
+  res.end(JSON.stringify({ error: "Not found", endpoints: ["/mcp", "/sse", "/health"] }));
 });
 
 // ── Start ──────────────────────────────────────
