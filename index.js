@@ -50,37 +50,62 @@ async function ensureLoggedIn() {
 async function doLogin(schoolName, username, password) {
   const p = await getBrowserPage();
   try {
-    await p.goto("https://all.uddataplus.dk", { waitUntil: "networkidle", timeout: 30000 });
-    const options = await p.$$eval("select option", opts => opts.map(o => ({ value: o.value, text: o.textContent.trim() })));
-    const match = options.find(o => o.text.toLowerCase().includes(schoolName.toLowerCase()));
-    if (!match) {
-      const names = options.filter(o => o.text).map(o => o.text).slice(0, 15).join(", ");
-      return { success: false, message: `Skolen "${schoolName}" blev ikke fundet. Prøv: ${names}` };
+    await p.goto("https://all.uddataplus.dk", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await p.waitForTimeout(3000);
+
+    // Log what we see on the page for debugging
+    const pageInfo = await p.evaluate(() => {
+      const sel = document.querySelector("select");
+      const opts = sel ? Array.from(sel.options).map(o => o.text.trim()) : [];
+      const btns = Array.from(document.querySelectorAll("button, a")).map(b => b.textContent.trim()).filter(t => t.length > 0 && t.length < 50);
+      const inputs = Array.from(document.querySelectorAll("input")).map(i => i.type + ":" + (i.name||i.id||i.placeholder||""));
+      return { optionCount: opts.length, options: opts.slice(0,5), buttons: btns.slice(0,10), inputs };
+    });
+    process.stderr.write("Page info: " + JSON.stringify(pageInfo) + "\n");
+
+    // Try select dropdown first
+    const selectEl = await p.$("select");
+    if (selectEl) {
+      const options = await p.$$eval("select option", opts => opts.map(o => ({ value: o.value, text: o.textContent.trim() })));
+      const match = options.find(o => o.text.toLowerCase().includes(schoolName.toLowerCase()));
+      if (match) {
+        await p.selectOption("select", match.value);
+        sessionState.schoolSlug = match.value;
+        process.stderr.write("Selected school: " + match.text + "\n");
+      } else {
+        process.stderr.write("School not in dropdown (" + options.length + " options). Trying direct URL...\n");
+      }
     }
-    await p.selectOption("select", match.value);
-    sessionState.schoolSlug = match.value;
-    await p.click('button[type="submit"], input[type="submit"]');
+
+    // Click "Unilogin" button specifically (visible on TECHCOLLEGE page)
+    const uniBtn = await p.$("button:has-text('Unilogin'), a:has-text('Unilogin'), button:has-text('UNI'), a:has-text('UNI-login')");
+    if (uniBtn) {
+      process.stderr.write("Found Unilogin button, clicking...\n");
+      await uniBtn.click();
+    } else {
+      await p.click('button[type="submit"], input[type="submit"]');
+    }
     await p.waitForLoadState("networkidle", { timeout: 20000 });
+
     const url1 = p.url();
     process.stderr.write("After school select: " + url1 + "\n");
-    if (url1.includes("uni-login") || url1.includes("unilogin") || url1.includes("broker")) {
-      await p.fill('input[type="text"], input[name="username"]', username);
-      await p.fill('input[type="password"]', password);
-      await p.click('button[type="submit"], input[type="submit"]');
-      await p.waitForLoadState("networkidle", { timeout: 20000 });
-    } else if (url1.includes("login") || url1.includes("skolid")) {
-      const uf = await p.$('input[type="text"], input[name="username"]');
+
+    if (url1.includes("uni-login") || url1.includes("unilogin") || url1.includes("broker") || url1.includes("login")) {
+      // Fill username and password
+      await p.waitForSelector('input[type="password"]', { timeout: 10000 }).catch(() => {});
+      const uf = await p.$('input[type="text"], input[name="username"], input[id="username"]');
       const pf = await p.$('input[type="password"]');
-      if (uf) await uf.fill(username);
-      if (pf) await pf.fill(password);
+      if (uf) { await uf.fill(username); process.stderr.write("Filled username\n"); }
+      if (pf) { await pf.fill(password); process.stderr.write("Filled password\n"); }
       await p.click('button[type="submit"], input[type="submit"]');
       await p.waitForLoadState("networkidle", { timeout: 20000 });
     }
+
     const finalUrl = p.url();
     process.stderr.write("After login: " + finalUrl + "\n");
     if (finalUrl.includes("uddataplus.dk") && !finalUrl.includes("login")) {
       sessionState.isLoggedIn = true;
-      return { success: true, message: "Logget ind på Studie+ (" + match.text + ")" };
+      return { success: true, message: "Logget ind på Studie+" };
     }
     return { success: false, message: "Login mislykkedes. Stadig på: " + finalUrl };
   } catch (err) { return { success: false, message: "Login fejl: " + err.message }; }
