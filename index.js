@@ -7,8 +7,11 @@ try { require("dotenv").config({ path: path.join(__dirname, ".env") }); } catch 
 
 const http = require("http");
 const { randomUUID } = require("crypto");
-const { McpServer } = require("@modelcontextprotocol/sdk/dist/cjs/server/mcp.js");
-const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/dist/cjs/server/streamableHttp.js");
+const { createRequire } = require("module");
+const _sdkPkg = require.resolve("@modelcontextprotocol/sdk/package.json").replace("/dist/cjs/package.json", "/package.json");
+const sdkRequire = createRequire(_sdkPkg);
+const { McpServer } = sdkRequire("./dist/cjs/server/mcp.js");
+const { StreamableHTTPServerTransport } = sdkRequire("./dist/cjs/server/streamableHttp.js");
 const { z } = require("zod");
 const { chromium } = require("playwright");
 
